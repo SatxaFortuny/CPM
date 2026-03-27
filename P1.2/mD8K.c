@@ -149,7 +149,7 @@ int main()
 
     // Comprovacio MD X MD -> M i MD x MD -> MD
     Suma = 0;
-    for(k=0;k<neleC;k++)
+    for(k=0;k<ne[<35;154;45MleC;k++)
      {
         Suma += CD[k].v;
         if (CD[k].v != C1[CD[k].i][CD[k].j])
