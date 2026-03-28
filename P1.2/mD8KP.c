@@ -1,236 +1,199 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <time.h>
-#include <strings.h>
 #include <string.h>
 #include <assert.h>
 #include <omp.h>
 
 #define N 8000L
 #define ND (N*N/100)
+#define BLOCK_SIZE 16 // Mida del bloc per la memòria cau L1
 
 typedef struct {
-    int i, j, v;
+    int i,j,v;
 } tmd;
 
-int A[N][N], B[N][N], C1[N][N], C2[N][N];
-int iAD[N+1], jBD[N+1], jAD[N+1];
-tmd AD[ND], BD[ND], ADcol[ND], CD[N*N];
+int A[N][N],B[N][N],C[N][N],C1[N][N],C2[N][N];
+int jBD[N+1];
+tmd AD[ND],BD[ND],CD[N*N];
 
 long long Suma;
 
-int cmp_fil(const void *pa, const void *pb) {
-    tmd *a = (tmd*)pa;
-    tmd *b = (tmd*)pb;
-    if (a->i > b->i) return 1;
-    else if (a->i < b->i) return -1;
+int cmp_fil(const void *pa, const void *pb)
+{
+    tmd * a = (tmd*)pa;
+    tmd * b = (tmd*)pb;
+    if (a->i > b->i) return(1);
+    else if (a->i < b->i) return (-1);
     else return (a->j - b->j);
 }
 
-int cmp_col(const void *pa, const void *pb) {
-    tmd *a = (tmd*)pa;
-    tmd *b = (tmd*)pb;
-    if (a->j > b->j) return 1;
-    else if (a->j < b->j) return -1;
+int cmp_col(const void *pa, const void *pb)
+{
+    tmd * a = (tmd*)pa;
+    tmd * b = (tmd*)pb;
+    if (a->j > b->j) return(1);
+    else if (a->j < b->j) return (-1);
     else return (a->i - b->i);
 }
 
-int main() {
-    int i, j, k;
-    int neleC = 0;
-    int num_threads;
-
-    // ---------------------------------------------------
-    // Generació de matrius disperses A i B (seqüencial)
-    // ---------------------------------------------------
-    bzero(A, sizeof(int)*(N*N));
-    bzero(B, sizeof(int)*(N*N));
-
+int main()
+{
+    int i,j,k,neleC;
+    
+    // First-touch
+    #pragma omp parallel for schedule(static)
+    for (int idx = 0; idx < N; idx++) {
+        memset(A[idx], 0, sizeof(int) * N);
+        memset(B[idx], 0, sizeof(int) * N);
+        memset(C[idx], 0, sizeof(int) * N);
+        memset(C1[idx], 0, sizeof(int) * N);
+        memset(C2[idx], 0, sizeof(int) * N);
+    }
+     
     for(k=0;k<ND;k++) {
         AD[k].i=rand()%(N-1);
         AD[k].j=rand()%(N-1);
         AD[k].v=rand()%100+1;
         while (A[AD[k].i][AD[k].j]) {
-            if(AD[k].i < AD[k].j)
-                AD[k].i = (AD[k].i + 1)%N;
-            else
-                AD[k].j = (AD[k].j + 1)%N;
+            if(AD[k].i < AD[k].j) AD[k].i = (AD[k].i + 1)%N;
+            else AD[k].j = (AD[k].j + 1)%N;
         }
         A[AD[k].i][AD[k].j] = AD[k].v;
     }
-    qsort(AD, ND, sizeof(tmd), cmp_fil);   // AD ordenat per files
+    qsort(AD,ND,sizeof(tmd),cmp_fil); // ordenat per files
 
     for(k=0;k<ND;k++) {
         BD[k].i=rand()%(N-1);
         BD[k].j=rand()%(N-1);
         BD[k].v=rand()%100+1;
         while (B[BD[k].i][BD[k].j]) {
-            if(BD[k].i < BD[k].j)
-                BD[k].i = (BD[k].i + 1)%N;
-            else
-                BD[k].j = (BD[k].j + 1)%N;
+            if(BD[k].i < BD[k].j) BD[k].i = (BD[k].i + 1)%N;
+            else BD[k].j = (BD[k].j + 1)%N;
         }
         B[BD[k].i][BD[k].j] = BD[k].v;
     }
-    qsort(BD, ND, sizeof(tmd), cmp_col);   // BD ordenat per columnes
-
-    // ---------------------------------------------------
-    // Construcció d'índexs (seqüencial, fora del parallel)
-    // ---------------------------------------------------
-
-    // Índex de files d'AD (CSR)
-    k = 0;
-    for (i = 0; i < N+1; i++) {
-        while (k < ND && i > AD[k].i) k++;
-        iAD[i] = k;
+    qsort(BD,ND,sizeof(tmd),cmp_col); // ordenat per columnes
+    
+    // calcul dels index de les columnes
+    k=0;
+    for (j=0; j<N+1; j++) {
+      while (k < ND && j>BD[k].j) k++;
+      jBD[j] = k;
     }
 
-    // Índex de columnes de BD
-    k = 0;
-    for (j = 0; j < N+1; j++) {
-        while (k < ND && j > BD[k].j) k++;
-        jBD[j] = k;
-    }
-
-    // Còpia d'AD ordenada per columnes + índex de columnes d'AD
-    memcpy(ADcol, AD, ND * sizeof(tmd));
-    qsort(ADcol, ND, sizeof(tmd), cmp_col);
-    k = 0;
-    for (j = 0; j < N+1; j++) {
-        while (k < ND && j > ADcol[k].j) k++;
-        jAD[j] = k;
-    }
-
-    Suma = 0;
-
+    neleC = 0;
+    
     #pragma omp parallel
     {
-        // ---------------------------------------------------
-        // Inicialitzar C1 i C2
-        // ---------------------------------------------------
-        #pragma omp for collapse(2) nowait
-        for(i=0; i<N; i++)
-            for(j=0; j<N; j++)
-                C1[i][j] = 0;
+        // 1. Reservem la memòria.
+        int (*priv_VBcol)[BLOCK_SIZE] = malloc(sizeof(int) * N * BLOCK_SIZE);
+        int (*priv_VCcol)[BLOCK_SIZE] = malloc(sizeof(int) * N * BLOCK_SIZE);
 
-        #pragma omp for collapse(2) nowait
-        for(i=0; i<N; i++)
-            for(j=0; j<N; j++)
-                C2[i][j] = 0;
+        // Control de seguretat per si el sistema operatiu ens denega la memòria
+        if (priv_VBcol == NULL || priv_VCcol == NULL) {
+            printf("Error: No hi ha memòria suficient per als fils.\n");
+            exit(1);
+        }
 
-        // ---------------------------------------------------
-        // FASE 1: MD x M -> C1 (densa), per verificació
-        // Paral·lelitzat per files de A, cache-friendly
-        // ---------------------------------------------------
+        // --- C1: Matriu dispersa per matriu ---
+        #pragma omp for schedule(static) nowait
+        for (int ib = 0; ib < N; ib += BLOCK_SIZE) {
+            for (int k = 0; k < ND; k++) {
+                int rA = AD[k].i;
+                int cA = AD[k].j;
+                int vA = AD[k].v;
+                
+                // Eliminat pragma omp simd per evitar fallades d'alineació de maquinari
+                for (int i = ib; i < ib + BLOCK_SIZE; i++) {
+                    C1[rA][i] += vA * B[cA][i];
+                }
+            }
+        }
+                
+        // --- C2: Matriu dispersa per matriu dispersa ---
         #pragma omp for schedule(dynamic, 32) nowait
-        for (int r = 0; r < N; r++) {
-            for (int ptr = iAD[r]; ptr < iAD[r+1]; ptr++) {
-                int col_A = AD[ptr].j;
-                int val_A = AD[ptr].v;
-                int *C1_row = C1[r];
-                int *B_row  = B[col_A];
-                for (int c = 0; c < N; c++)
-                    C1_row[c] += val_A * B_row[c];
-            }
-        }
+        for (int ib = 0; ib < N; ib += BLOCK_SIZE) {
+            memset(priv_VBcol, 0, sizeof(int) * N * BLOCK_SIZE);
 
-        // ---------------------------------------------------
-        // FASE 2: MD x MD -> C2 (densa), per verificació
-        // Merge-join sobre files d'A i columnes de B
-        // ---------------------------------------------------
-        #pragma omp for schedule(dynamic, 8) nowait
-        for (int r = 0; r < N; r++) {
-            for (int c = 0; c < N; c++) {
-                int sum = 0;
-                int ka = iAD[r];
-                int kb = jBD[c];
-                while (ka < iAD[r+1] && kb < jBD[c+1]) {
-                    if      (AD[ka].j == BD[kb].i) { sum += AD[ka].v * BD[kb].v; ka++; kb++; }
-                    else if (AD[ka].j <  BD[kb].i)   ka++;
-                    else                              kb++;
+            // expandir Columna de B[*][i]
+            for (int i = ib; i < ib + BLOCK_SIZE; i++) {
+                for (int k = jBD[i]; k < jBD[i+1]; k++) {
+                    priv_VBcol[BD[k].i][i - ib] = BD[k].v;
                 }
-                if (sum != 0) C2[r][c] = sum;
+            }
+            
+            // Calcul de tota una columna de C
+            for (int k = 0; k < ND; k++) {
+                int rA = AD[k].i;
+                int cA = AD[k].j;
+                int vA = AD[k].v;
+                
+                for (int i = ib; i < ib + BLOCK_SIZE; i++) {
+                    C2[rA][i] += vA * priv_VBcol[cA][i - ib];
+                }
             }
         }
-
-        // ---------------------------------------------------
-        // FASE 3: MD x MD -> CD (esparsa), via jAD
-        // Cada thread té el seu VCcol privat i local_CD propi.
-        // No cal VBcol: s'itera directament sobre BD.
-        // ---------------------------------------------------
-        int *VCcol    = (int*)calloc(N, sizeof(int));
-
-        #pragma omp single
-        num_threads = omp_get_num_threads();
-
-        // Reserva de buffers locals (un per thread)
-        int  *local_counts;
-        tmd **local_CD;
-        #pragma omp single
-        {
-            local_counts = (int*)calloc(num_threads, sizeof(int));
-            local_CD     = (tmd**)malloc(num_threads * sizeof(tmd*));
-            for(i = 0; i < num_threads; i++)
-                local_CD[i] = (tmd*)malloc((ND * 2 / num_threads + 1000) * sizeof(tmd));
-        }
-
-        int tid = omp_get_thread_num();
-
+                    
+        // --- CD: Matriu dispersa per matriu dispersa -> dona matriu Dispersa ---
         #pragma omp for schedule(dynamic, 8)
-        for (int c = 0; c < N; c++) {
-            // Acumular en VCcol privat iterant sobre no-nuls de columna c de B
-            for (int p = jBD[c]; p < jBD[c+1]; p++) {
-                int row_B = BD[p].i;
-                int val_B = BD[p].v;
-                // Per cada element de BD, buscar els elements d'AD amb la mateixa columna
-                for (int q = jAD[row_B]; q < jAD[row_B+1]; q++)
-                    VCcol[ADcol[q].i] += ADcol[q].v * val_B;
+        for (int ib = 0; ib < N; ib += BLOCK_SIZE) {
+            memset(priv_VBcol, 0, sizeof(int) * N * BLOCK_SIZE);
+            memset(priv_VCcol, 0, sizeof(int) * N * BLOCK_SIZE);
+
+            // expandir Columna de B[*][i]
+            for (int i = ib; i < ib + BLOCK_SIZE; i++) {
+                for (int k = jBD[i]; k < jBD[i+1]; k++) {
+                    priv_VBcol[BD[k].i][i - ib] = BD[k].v;
+                }
             }
-            // Comprimir VCcol -> local_CD del thread
-            for (int r = 0; r < N; r++) {
-                if (VCcol[r]) {
-                    local_CD[tid][local_counts[tid]++] = (tmd){r, c, VCcol[r]};
-                    VCcol[r] = 0;
+            
+            // Calcul de tota una columna de C
+            for (int k = 0; k < ND; k++) {
+                int rA = AD[k].i;
+                int cA = AD[k].j;
+                int vA = AD[k].v;
+                
+                for (int i = ib; i < ib + BLOCK_SIZE; i++) {
+                    priv_VCcol[rA][i - ib] += vA * priv_VBcol[cA][i - ib];
+                }
+            }
+            
+            // Compressio de C
+            for (int i = ib; i < ib + BLOCK_SIZE; i++) {
+                for (int j = 0; j < N; j++) {
+                    if (priv_VCcol[j][i - ib]) {
+                        int pos;
+                        #pragma omp atomic capture
+                        pos = neleC++;
+
+                        CD[pos].i = j;
+                        CD[pos].j = i;
+                        CD[pos].v = priv_VCcol[j][i - ib];
+                    }
                 }
             }
         }
 
-        free(VCcol);
-
-        // Fusió dels buffers locals en CD global (seqüencial)
-        #pragma omp single
-        {
-            neleC = 0;
-            for(i = 0; i < num_threads; i++) {
-                memcpy(&CD[neleC], local_CD[i], local_counts[i] * sizeof(tmd));
-                neleC += local_counts[i];
-                free(local_CD[i]);
-            }
-            free(local_CD);
-            free(local_counts);
-        }
-
-        // ---------------------------------------------------
-        // Verificació: C1 vs C2 (MD x M vs MD x MD -> densa)
-        // ---------------------------------------------------
-        #pragma omp for collapse(2) nowait
-        for (int r = 0; r < N; r++)
-            for (int c = 0; c < N; c++)
-                if (C2[r][c] != C1[r][c])
-                    printf("Diferencies C1 i C2 pos %d,%d: %d != %d\n", r, c, C1[r][c], C2[r][c]);
-
-        // Verificació: C1 vs CD (MD x M vs MD x MD -> esparsa)
-        #pragma omp for reduction(+:Suma)
-        for(int m = 0; m < neleC; m++) {
-            Suma += CD[m].v;
-            if (CD[m].v != C1[CD[m].i][CD[m].j])
-                printf("Diferencies C1 i CD a i:%d,j:%d,v:%d, m:%d, vd:%d\n",
-                       CD[m].i, CD[m].j, C1[CD[m].i][CD[m].j], m, CD[m].v);
-        }
+        free(priv_VBcol);
+        free(priv_VCcol);
     }
 
-    printf("\nNumero elements de la matriu dispersa C: %d\n", neleC);
-    printf("Suma dels elements de C: %lld \n", Suma);
+    // Comprovacio MD x M -> M i MD x MD -> M
+    for (i=0;i<N;i++)
+        for(j=0;j<N;j++)
+            if (C2[i][j] != C1[i][j])
+                printf("Diferencies C1 i C2 pos %d,%d: %d != %d\n",i,j,C1[i][j],C2[i][j]);
 
-    return 0;
+    // Comprovacio MD X MD -> M i MD x MD -> MD
+    Suma = 0;
+    for(k=0;k<neleC;k++) {
+        Suma += CD[k].v;
+        if (CD[k].v != C1[CD[k].i][CD[k].j])
+            printf("Diferencies C1 i CD a i:%d,j:%d,v%d, k:%d, vd:%d\n",CD[k].i,CD[k].j,C1[CD[k].i][CD[k].j],k,CD[k].v);
+    }
+     
+    printf ("\nNumero elements de la matriu dispersa C %d\n",neleC);   
+    printf("Suma dels elements de C %lld \n",Suma);
+    exit(0);
 }

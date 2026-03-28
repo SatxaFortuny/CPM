@@ -1,0 +1,57 @@
+gcc -O3 -fopenmp mD8KP.c -o par
+gcc -O3 -fopenmp mD8K.c -o seq
+
+srun -p orca -c 128 time ./seq
+0:48.59
+======================================================
+
+OMP_NUM_THREADS=2 srun -p orca --exclusive -n 1 -c 2 time ./par
+0:04.99
+======================================================
+
+OMP_NUM_THREADS=4 srun -p orca --exclusive -n 1 -c 4 time ./par
+0:02.95
+======================================================
+
+OMP_NUM_THREADS=8 srun -p orca --exclusive -n 1 -c 8 time ./par
+0:02.13
+======================================================
+
+OMP_NUM_THREADS=16 srun -p orca --exclusive -n 1 -c 16 time ./par
+0:02.27
+======================================================
+
+OMP_NUM_THREADS=32 srun -p orca --exclusive -n 1 -c 32 time ./par
+0:02.23
+======================================================
+
+OMP_NUM_THREADS=64 srun -p orca --exclusive -n 1 -c 64 time ./par
+0:02.32
+======================================================
+
+OMP_NUM_THREADS=128 srun -p orca --exclusive -n 1 -c 128 time ./par
+0:02.60
+
+||||||||||||||||||||||||||TEEN|||||||||||||||||||||||||||
+srun -p teen -c 16 time ./seq
+0:16.26
+======================================================
+
+OMP_NUM_THREADS=2 srun -p teen --exclusive -n 1 -c 2 time ./par
+0:03.62
+======================================================
+
+OMP_NUM_THREADS=4 srun -p teen --exclusive -n 1 -c 4 time ./par
+0:02.08
+======================================================
+
+OMP_NUM_THREADS=8 srun -p teen --exclusive -n 1 -c 8 time ./par
+
+======================================================
+
+OMP_NUM_THREADS=16 srun -p teen --exclusive -n 1 -c 16 time ./par
+0:01.49
+======================================================
+
+OMP_NUM_THREADS=32 srun -p teen --exclusive -n 1 -c 16 time ./par
+0:01.35
